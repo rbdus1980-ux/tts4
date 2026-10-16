@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>음성 → 텍스트 → 영어 번역 → 원어민 발음 → 어휘 해설</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+         max-width: 920px; margin: 0 auto; padding: 24px; background: #f6f7f9; color: #1c1e21; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { color: #666; font-size: 13px; margin-bottom: 18px; }
+  .card { background: #fff; border: 1px solid #e3e5e8; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .card h2 { font-size: 14px; margin: 0 0 10px; color: #444; letter-spacing: .3px; }
+  textarea { width: 100%; min-height: 110px; padding: 10px; font-size: 15px; line-height: 1.6;
+             border: 1px solid #d0d3d7; border-radius: 6px; resize: vertical; font-family: inherit; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+  button { padding: 9px 16px; font-size: 14px; border: 0; border-radius: 6px; cursor: pointer;
+           background: #2d6cdf; color: #fff; font-weight: 600; }
+  button.ghost { background: #eceef1; color: #333; }
+  button.rec { background: #d93b3b; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  select, input[type=range] { padding: 6px; border: 1px solid #d0d3d7; border-radius: 6px; background:#fff; }
+  label { font-size: 13px; color: #555; }
+  #status { font-size: 13px; padding: 8px 12px; border-radius: 6px; background: #eef2fa; color: #2d4f8f; }
+  .warn { background: #fff4e5 !important; color: #8a5a00 !important; }
+  .err  { background: #fdecec !important; color: #a12020 !important; }
+  .ok   { background: #e8f6ec !important; color: #1d6b35 !important; }
+  audio { width: 100%; margin-top: 10px; }
+  progress { width: 100%; height: 6px; margin-top: 8px; }
+  #speakView { border: 1px solid #e3e5e8; border-radius: 6px; padding: 12px; margin-top: 10px;
+               line-height: 1.9; font-size: 15px; max-height: 190px; overflow-y: auto; background: #fafbfc; }
+  #speakView span { padding: 1px 2px; border-radius: 3px; }
+  #speakView span.cur { background: #ffe9a8; font-weight: 600; }
+  #speakView span.done { color: #999; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+  th, td { border: 1px solid #e3e5e8; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f2f4f7; font-size: 13px; color: #444; }
+  td.term { font-weight: 700; color: #1c3f7a; white-space: nowrap; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 10px;
+         background: #e7edf9; color: #2d4f8f; margin-left: 4px; }
+  .tag.idiom { background: #fdeceb; color: #a12020; }
+  .tag.phr   { background: #fff2dd; color: #8a5a00; }
+  .empty { color: #888; font-size: 13px; padding: 10px 0; }
+</style>
+</head>
+<body>
+
+<h1>음성 → 텍스트 → 영어 번역 → 원어민 발음 → 어휘 해설</h1>
+<p class="sub">외부 API 없음 · 브라우저 내장 Web Speech / Translator / LanguageModel API 만 사용 · Chrome 권장</p>
+
+<div id="status">준비됨</div>
+
+<!-- 1 -->
+<div class="card">
+  <h2>1. 음성 인식 (STT)</h2>
+  <div class="row">
+    <label>입력 언어
+      <select id="srcLang">
+        <option value="ko-KR">한국어</option>
+        <option value="ja-JP">일본어</option>
+        <option value="zh-CN">중국어</option>
+        <option value="en-US">영어</option>
+      </select>
+    </label>
+    <button id="btnStart">🎤 녹음 시작</button>
+    <button id="btnStop" class="ghost" disabled>■ 정지</button>
+    <button id="btnClear" class="ghost">지우기</button>
+    <span class="sub" style="margin:0" id="srcCount">0자</span>
+  </div>
+  <textarea id="srcText" placeholder="인식된 텍스트가 여기에 표시됩니다. 직접 입력/수정도 가능합니다."></textarea>
+</div>
+
+<!-- 2 -->
+<div class="card">
+  <h2>2. 영어 전체 번역 (문장 단위 분할 처리)</h2>
+  <div class="row">
+    <button id="btnTranslate">전체 번역하기</button>
+    <span id="trInfo" class="sub" style="margin:0"></span>
+  </div>
+  <progress id="trBar" value="0" max="100" hidden></progress>
+  <textarea id="dstText" placeholder="English translation..."></textarea>
+  <div class="row"><span class="sub" style="margin:0" id="dstCount">0자</span></div>
+</div>
+
+<!-- 3 -->
+<div class="card">
+  <h2>3. 원어민 발음 재생 (전체 문장 끊김 없이)</h2>
+  <div class="row">
+    <label>음성 <select id="voiceSel" style="max-width:280px"></select></label>
+    <label>속도 <input type="range" id="rate" min="0.5" max="1.5" step="0.1" value="1"></label>
+    <label>높이 <input type="range" id="pitch" min="0.5" max="1.5" step="0.1" value="1"></label>
+  </div>
+  <div class="row">
+    <button id="btnSpeak">▶ 전체 읽어주기</button>
+    <button id="btnPause" class="ghost">⏸ 일시정지</button>
+    <button id="btnResume" class="ghost">▶ 계속</button>
+    <button id="btnStopSpeak" class="ghost">■ 중지</button>
+    <span class="sub" style="margin:0" id="spkProg"></span>
+  </div>
+  <div id="speakView" class="empty">번역된 문장이 여기에 표시되며, 읽는 중인 문장이 하이라이트됩니다.</div>
+</div>
+
+<!-- 4 -->
+<div class="card">
+  <h2>4. 주요 표현 · 단어 해설</h2>
+  <div class="row">
+    <button id="btnExplain">📘 해설 생성</button>
+    <label>난이도
+      <select id="lvl">
+        <option value="beginner">입문 (쉬운 단어까지)</option>
+        <option value="intermediate" selected>중급 (핵심만)</option>
+        <option value="advanced">고급 (관용·숙어 위주)</option>
+      </select>
+    </label>
+    <span id="aiInfo" class="sub" style="margin:0"></span>
+  </div>
+  <div id="explainOut" class="empty">아직 해설이 없습니다. 번역 후 “해설 생성”을 누르세요.</div>
+</div>
+
+<!-- 5 -->
+<div class="card">
+  <h2>5. 저장</h2>
+  <div class="row">
+    <button id="btnSaveTxt" class="ghost">📄 텍스트+해설 저장 (.txt)</button>
+    <button id="btnRecord" class="rec">🔴 전체 발음 녹음 + 저장 (.webm)</button>
+    <button id="btnStopRecord" class="ghost" disabled>■ 녹음 종료</button>
+  </div>
+  <p class="sub" style="margin:8px 0 0">
+    ※ 화면 공유 창에서 <b>“Chrome 탭” → 현재 탭 → “탭 오디오도 공유”</b> 를 체크해야 소리가 녹음됩니다.
+  </p>
+  <audio id="player" controls hidden></audio>
+</div>
+
+<script>
+/* ============ 공통 ============ */
+const $ = id => document.getElementById(id);
+const setStatus = (m, t = '') => { $('status').textContent = m; $('status').className = t; };
+const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+function updCount() {
+  $('srcCount').textContent = $('srcText').value.length + '자';
+  $('dstCount').textContent = $('dstText').value.length + '자';
+}
+$('srcText').addEventListener('input', updCount);
+$('dstText').addEventListener('input', () => { updCount(); renderSpeakView(); });
+
+/* 문장 분할: 종결부호 + 한국어 어미 + 줄바꿈 기준 */
+function splitSentences(text) {
+  return text
+    .replace(/\r/g, '')
+    .split(/\n+/)
+    .flatMap(line => line.match(/[^.!?。！？]+[.!?。！？]+["')\]]*|[^.!?。！？]+/g) || [])
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+/* 청크 묶기: 번역 엔진 안정성을 위해 maxLen 이하로 */
+function chunkSentences(sents, maxLen) {
+  const out = []; let buf = '';
+  for (const s of sents) {
+    if (s.length > maxLen) {                     // 초장문은 쉼표 기준 재분할
+      if (buf) { out.push(buf); buf = ''; }
+      let piece = '';
+      for (const part of s.split(/(?<=,)\s*/)) {
+        if ((piece + part).length > maxLen) { if (piece) out.push(piece); piece = part; }
+        else piece += part;
+      }
+      if (piece) out.push(piece);
+    } else if ((buf + ' ' + s).trim().length > maxLen) { out.push(buf); buf = s; }
+    else buf = (buf ? buf + ' ' : '') + s;
+  }
+  if (buf) out.push(buf);
+  return out;
+}
+
+/* ============ 1. STT ============ */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recog = null, finalText = '', userStopped = false;
+
+if (!SR) { setStatus('이 브라우저는 음성 인식을 지원하지 않습니다. Chrome/Edge를 사용하세요.', 'err'); $('btnStart').disabled = true; }
+
+$('btnStart').onclick = () => {
+  if (!SR) return;
+  userStopped = false;
+  finalText = $('srcText').value ? $('srcText').value.trimEnd() + ' ' : '';
+  recog = new SR();
+  recog.lang = $('srcLang').value;
+  recog.continuous = true;
+  recog.interimResults = true;
+
+  recog.onstart = () => { setStatus('🎤 듣는 중... 말씀하세요.'); $('btnStart').disabled = true; $('btnStop').disabled = false; };
+  recog.onresult = e => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) finalText += t.trim() + ' '; else interim += t;
+    }
+    $('srcText').value = finalText + interim;
+    updCount();
+  };
+  recog.onerror = e => {
+    const map = { 'not-allowed': '마이크 권한이 거부되었습니다.', 'no-speech': '음성이 감지되지 않았습니다. 계속 대기합니다.' };
+    if (e.error !== 'no-speech') setStatus('오류: ' + (map[e.error] || e.error), 'err');
+  };
+  recog.onend = () => {
+    if (!userStopped) { try { recog.start(); return; } catch (_) {} }  // 자동 끊김 시 재시작
+    setStatus('음성 인식 종료'); $('btnStart').disabled = false; $('btnStop').disabled = true;
+  };
+  recog.start();
+};
+$('btnStop').onclick = () => { userStopped = true; recog && recog.stop(); };
+$('btnClear').onclick = () => {
+  finalText = ''; $('srcText').value = ''; $('dstText').value = '';
+  $('explainOut').innerHTML = '해설이 초기화되었습니다.'; $('explainOut').className = 'empty';
+  updCount(); renderSpeakView();
+};
+
+/* ============ 2. 번역 (전체 분할 처리) ============ */
+const translatorCache = {};
+
+async function getTranslator(srcCode) {
+  if (translatorCache[srcCode] !== undefined) return translatorCache[srcCode];
+  if (!('Translator' in self)) return (translatorCache[srcCode] = null);
+  const pair = { sourceLanguage: srcCode, targetLanguage: 'en' };
+  try {
+    const avail = await Translator.availability(pair);
+    if (avail === 'unavailable') return (translatorCache[srcCode] = null);
+    const t = await Translator.create({
+      ...pair,
+      monitor(m) { m.addEventListener('downloadprogress', e =>
+        setStatus(`번역 모델 다운로드 ${Math.round(e.loaded * 100)}%`, 'warn')); }
+    });
+    return (translatorCache[srcCode] = t);
+  } catch (_) { return (translatorCache[srcCode] = null); }
+}
+
+$('btnTranslate').onclick = async () => {
+  const text = $('srcText').value.trim();
+  if (!text) return setStatus('번역할 텍스트가 없습니다.', 'warn');
+
+  const srcCode = $('srcLang').value.split('-')[0];
+  if (srcCode === 'en') { $('dstText').value = text; updCount(); renderSpeakView(); return setStatus('입력이 이미 영어입니다.', 'ok'); }
+
+  const tr = await getTranslator(srcCode);
+  if (!tr) {
+    $('dstText').value = text; updCount(); renderSpeakView();
+    return setStatus('내장 번역 API 미지원 — 원문을 복사했습니다. 영어 문장을 직접 입력하세요.', 'warn');
+  }
+
+  const chunks = chunkSentences(splitSentences(text), 600);
+  const bar = $('trBar'); bar.hidden = false; bar.value = 0; bar.max = chunks.length;
+  $('btnTranslate').disabled = true;
+  const results = [];
+
+  try {
+    for (let i = 0; i < chunks.length; i++) {
+      setStatus(`번역 중... (${i + 1}/${chunks.length})`);
+      let piece = '';
+      for (let retry = 0; retry < 2 && !piece; retry++) {
+        try { piece = await tr.translate(chunks[i]); }
+        catch (e) { if (retry === 1) piece = '[번역실패] ' + chunks[i]; await new Promise(r => setTimeout(r, 250)); }
+      }
+      results.push(piece.trim());
+      bar.value = i + 1;
+    }
+    $('dstText').value = results.join(' ').replace(/\s{2,}/g, ' ');
+    setStatus(`전체 번역 완료 — 문장 ${chunks.length}개 처리`, 'ok');
+  } catch (err) {
+    setStatus('번역 실패: ' + err.message, 'err');
+  } finally {
+    $('btnTranslate').disabled = false;
+    setTimeout(() => (bar.hidden = true), 800);
+    updCount(); renderSpeakView();
+  }
+};
+$('trInfo').textContent = ('Translator' in self) ? '내장 번역 엔진 사용 가능' : '내장 번역 미지원 — 영어를 직접 입력하세요';
+
+/* ============ 3. TTS (문장 큐 + keepalive) ============ */
+const synth = window.speechSynthesis;
+let voices = [], queue = [], qIdx = 0, speaking = false, keepAlive = null, onAllDone = null;
+
+function loadVoices() {
+  voices = synth.getVoices().filter(v => v.lang.toLowerCase().startsWith('en'));
+  const sel = $('voiceSel'); sel.innerHTML = '';
+  voices.forEach((v, i) => {
+    const o = document.createElement('option');
+    o.value = i; o.textContent = `${v.name} (${v.lang})${v.localService ? '' : ' ☁'}`;
+    sel.appendChild(o);
+  });
+  const pref = voices.findIndex(v => /Google US English|Samantha|Aria|Jenny|Natural/i.test(v.name));
+  if (pref >= 0) sel.value = pref;
+}
+loadVoices();
+synth.onvoiceschanged = loadVoices;
+
+function renderSpeakView() {
+  const sents = splitSentences($('dstText').value);
+  const view = $('speakView');
+  if (!sents.length) { view.className = 'empty'; view.textContent = '번역된 문장이 여기에 표시됩니다.'; return; }
+  view.className = '';
+  view.innerHTML = sents.map((s, i) => `<span data-i="${i}">${esc(s)}</span>`).join(' ');
+}
+
+function markSpeaking(i) {
+  $('speakView').querySelectorAll('span').forEach((el, j) => {
+    el.className = j === i ? 'cur' : (j < i ? 'done' : '');
+    if (j === i) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  });
+  $('spkProg').textContent = `${i + 1} / ${queue.length} 문장`;
+}
+
+function speakNext() {
+  if (qIdx >= queue.length) {
+    speaking = false; clearInterval(keepAlive); keepAlive = null;
+    $('spkProg').textContent = '';
+    setStatus('전체 재생 완료', 'ok');
+    if (onAllDone) { const cb = onAllDone; onAllDone = null; cb(); }
+    return;
+  }
+  const u = new SpeechSynthesisUtterance(queue[qIdx]);
+  const v = voices[$('voiceSel').value];
+  if (v) { u.voice = v; u.lang = v.lang; } else u.lang = 'en-US';
+  u.rate = parseFloat($('rate').value);
+  u.pitch = parseFloat($('pitch').value);
+  u.onstart = () => markSpeaking(qIdx);
+  u.onend = () => { qIdx++; setTimeout(speakNext, 60); };
+  u.onerror = () => { qIdx++; setTimeout(speakNext, 60); };
+  synth.speak(u);
+}
+
+function speakAll(done) {
+  const sents = splitSentences($('dstText').value);
+  if (!sents.length) { setStatus('읽을 영어 문장이 없습니다.', 'warn'); return false; }
+  synth.cancel();
+  queue = sents; qIdx = 0; speaking = true; onAllDone = done || null;
+  renderSpeakView();
+  setStatus(`🔊 재생 중... (총 ${sents.length}문장)`);
+  // Chrome 장문 끊김 방지 keepalive
+  clearInterval(keepAlive);
+  keepAlive = setInterval(() => { if (speaking && synth.speaking && !synth.paused) { synth.pause(); synth.resume(); } }, 9000);
+  speakNext();
+  return true;
+}
+
+$('btnSpeak').onclick = () => speakAll();
+$('btnPause').onclick = () => { synth.pause(); setStatus('일시정지'); };
+$('btnResume').onclick = () => { synth.resume(); setStatus('🔊 재생 중...'); };
+$('btnStopSpeak').onclick = () => {
+  speaking = false; clearInterval(keepAlive); keepAlive = null; onAllDone = null;
+  synth.cancel(); $('spkProg').textContent = '';
+  $('speakView').querySelectorAll('span').forEach(el => el.className = '');
+  setStatus('재생 중지');
+};
+
+/* ============ 4. 어휘·표현 해설 ============ */
+/* 4-A. 로컬 사전 (폴백용) */
+const IDIOMS = {
+  "break the ice": "어색한 분위기를 깨다",
+  "a piece of cake": "아주 쉬운 일",
+  "hit the road": "길을 나서다, 출발하다",
+  "keep in mind": "명심하다, 염두에 두다",
+  "in charge of": "~을 담당하는",
+  "as soon as possible": "가능한 한 빨리",
+  "on the other hand": "반면에",
+  "in terms of": "~의 측면에서",
+  "take care of": "~을 돌보다, 처리하다",
+  "make sure": "반드시 ~하도록 하다, 확인하다",
+  "come up with": "(아이디어를) 생각해 내다",
+  "look forward to": "~을 고대하다 (뒤에 동명사)",
+  "be able to": "~할 수 있다",
+  "as a result": "그 결과로",
+  "for example": "예를 들어",
+  "at the same time": "동시에",
+  "by the way": "그런데, 말이 나온 김에",
+  "in addition": "게다가, 추가로",
+  "according to": "~에 따르면",
+  "due to": "~때문에 (명사구 앞)",
+  "rather than": "~라기보다는",
+  "no matter what": "무슨 일이 있어도",
+  "end up": "결국 ~하게 되다",
+  "figure out": "알아내다, 파악하다",
+  "point out": "지적하다",
+  "carry out": "수행하다, 실행하다",
+  "set up": "설치하다, 마련하다",
+  "give up": "포기하다",
+  "turn out": "~로 판명되다",
+  "deal with": "다루다, 대처하다",
+  "focus on": "~에 집중하다",
+  "depend on": "~에 달려 있다",
+  "result in": "~을 초래하다",
+  "based on": "~에 근거하여"
+};
+const WORDS = {
+  achieve: ["동사", "달성하다, 이루다"], significant: ["형용사", "상당한, 의미 있는"],
+  improve: ["동사", "향상시키다, 개선되다"], require: ["동사", "필요로 하다, 요구하다"],
+  provide: ["동사", "제공하다"], consider: ["동사", "고려하다, ~라고 여기다"],
+  available: ["형용사", "이용 가능한, 시간이 되는"], appropriate: ["형용사", "적절한"],
+  essential: ["형용사", "필수적인"], efficient: ["형용사", "효율적인"],
+  opportunity: ["명사", "기회"], environment: ["명사", "환경"],
+  experience: ["명사/동사", "경험(하다)"], suggest: ["동사", "제안하다, 시사하다"],
+  increase: ["동사/명사", "증가(하다)"], decrease: ["동사/명사", "감소(하다)"],
+  maintain: ["동사", "유지하다"], develop: ["동사", "개발하다, 발전시키다"],
+  recognize: ["동사", "인식하다, 인정하다"], participate: ["동사", "참여하다 (in과 함께)"],
+  responsible: ["형용사", "책임이 있는 (for와 함께)"], particular: ["형용사", "특정한, 특별한"],
+  various: ["형용사", "다양한"], current: ["형용사", "현재의"],
+  previous: ["형용사", "이전의"], specific: ["형용사", "구체적인, 특정한"],
+  determine: ["동사", "결정하다, 밝혀내다"], establish: ["동사", "설립하다, 확립하다"],
+  indicate: ["동사", "나타내다, 보여주다"], obtain: ["동사", "얻다, 획득하다"],
+  reduce: ["동사", "줄이다"], ensure: ["동사", "보장하다, 확실히 하다"],
+  implement: ["동사", "실행하다, 구현하다"], approach: ["명사/동사", "접근(법), 다가가다"],
+  benefit: ["명사/동사", "이익, 혜택을 보다"], challenge: ["명사/동사", "과제, 도전(하다)"],
+  strategy: ["명사", "전략"], process: ["명사/동사", "과정, 처리하다"],
+  relationship: ["명사", "관계"], community: ["명사", "공동체, 지역사회"],
+  technology: ["명사", "기술"], knowledge: ["명사", "지식"],
+  performance: ["명사", "성과, 공연"], response: ["명사", "응답, 반응"]
+};
+const STOP = new Set(("a an the and or but if of to in on at for with by from as is are was were be been am do does did " +
+  "this that these those it its i you he she we they my your his her our their not no so very can could will would " +
+  "should may might must have has had there here what when where who which how all some any more most other such " +
+  "than then them him me us too also just only about into over under again out up down off").split(" "));
+
+function phoneticHint(w) {
+  const rules = [[/tion$/, "-tion = /ʃən/ (션)"], [/sion$/, "-sion = /ʒən/ or /ʃən/"],
+    [/ough/, "-ough 는 단어마다 발음이 다름 (though /oʊ/, through /uː/)"],
+    [/^kn/, "kn- 의 k는 묵음"], [/^wr/, "wr- 의 w는 묵음"],
+    [/ture$/, "-ture = /tʃər/ (처)"], [/ous$/, "-ous = /əs/ (어스)"],
+    [/ed$/, "-ed 는 /t/ /d/ /ɪd/ 세 가지로 발음"]];
+  for (const [re, tip] of rules) if (re.test(w)) return tip;
+  return "";
+}
+function guessPOS(w) {
+  if (/ly$/.test(w)) return "부사";
+  if (/(tion|sion|ment|ness|ity|ance|ence|ship)$/.test(w)) return "명사";
+  if (/(ous|ive|ful|less|able|ible|al|ic)$/.test(w)) return "형용사";
+  if (/(ize|ify|ate)$/.test(w)) return "동사";
+  return "—";
+}
+
+function localExplain(text, level) {
+  const lower = text.toLowerCase();
+  const rows = [];
+
+  for (const [k, v] of Object.entries(IDIOMS)) {
+    if (lower.includes(k)) {
+      const type = k.split(" ").length >= 3 ? "idiom" : "phr";
+      rows.push({ term: k, tag: type === "idiom" ? "관용표현" : "구동사/전치사구", cls: type, pos: "표현", mean: v, tip: "문장에서 통째로 외우면 활용도가 높습니다." });
+    }
+  }
+
+  const minLen = level === "beginner" ? 4 : level === "intermediate" ? 6 : 8;
+  const seen = new Set();
+  (lower.match(/[a-z][a-z'-]+/g) || []).forEach(w => {
+    const base = w.replace(/('s|s|ed|ing)$/, "");
+    if (STOP.has(w) || seen.has(base) || w.length < minLen) return;
+    const hit = WORDS[w] || WORDS[base];
+    if (hit) { seen.add(base); rows.push({ term: w, tag: "핵심단어", cls: "", pos: hit[0], mean: hit[1], tip: phoneticHint(w) }); }
+    else if (level === "advanced" && w.length >= 9) {
+      seen.add(base);
+      rows.push({ term: w, tag: "긴 단어", cls: "", pos: guessPOS(w), mean: "(사전 미등록 — 문맥으로 의미 확인 필요)", tip: phoneticHint(w) });
+    }
+  });
+  return rows.slice(0, 30);
+}
+
+function renderTable(rows) {
+  const out = $('explainOut');
+  if (!rows.length) { out.className = 'empty'; out.textContent = '추출된 주요 표현이 없습니다. 난이도를 “입문”으로 낮춰 보세요.'; return; }
+  out.className = '';
+  out.innerHTML = `<table><thead><tr>
+      <th style="width:22%">표현 / 단어</th><th style="width:12%">품사</th>
+      <th style="width:34%">의미</th><th>설명 · 발음 팁</th></tr></thead><tbody>` +
+    rows.map(r => `<tr>
+      <td class="term">${esc(r.term)}<span class="tag ${r.cls}">${r.tag}</span></td>
+      <td>${esc(r.pos)}</td><td>${esc(r.mean)}</td><td>${esc(r.tip || '—')}</td>
+    </tr>`).join('') + `</tbody></table>`;
+}
+
+/* 4-B. 내장 LanguageModel(Prompt API) 우선 사용 */
+$('aiInfo').textContent = ('LanguageModel' in self) ? '내장 AI 해설 사용 가능' : '내장 AI 미지원 — 로컬 사전 기반 해설';
+
+async function aiExplain(text, level) {
+  if (!('LanguageModel' in self)) return null;
+  const avail = await LanguageModel.availability();
+  if (avail === 'unavailable') return null;
+  const session = await LanguageModel.create({
+    initialPrompts: [{ role: 'system', content:
+      '너는 한국인 영어 학습자를 돕는 교사다. 영어 문장에서 핵심 단어와 관용표현을 골라 ' +
+      '반드시 아래 형식의 줄만 출력한다: 표현|품사|한국어 의미|짧은 설명. 다른 말은 쓰지 마라.' }],
+    monitor(m) { m.addEventListener('downloadprogress', e =>
+      setStatus(`AI 모델 다운로드 ${Math.round(e.loaded * 100)}%`, 'warn')); }
+  });
+  const lvlTxt = { beginner: '기초 단어까지 포함해 15개', intermediate: '중급 핵심만 12개', advanced: '관용표현·숙어 위주 12개' }[level];
+  const res = await session.prompt(`다음 영어 문장에서 ${lvlTxt} 추출해라.\n\n${text.slice(0, 3000)}`);
+  session.destroy();
+
+  const rows = res.split('\n').map(l => l.trim()).filter(l => l.includes('|')).map(l => {
+    const [term, pos, mean, tip] = l.split('|').map(s => s.trim());
+    return { term, pos: pos || '—', mean: mean || '', tip: tip || '',
+             tag: (term || '').includes(' ') ? '표현' : '단어',
+             cls: (term || '').split(' ').length >= 3 ? 'idiom' : ((term || '').includes(' ') ? 'phr' : '') };
+  }).filter(r => r.term && r.mean);
+  return rows.length ? rows : null;
+}
+
+$('btnExplain').onclick = async () => {
+  const text = $('dstText').value.trim();
+  if (!text) return setStatus('해설할 영어 문장이 없습니다. 먼저 번역하세요.', 'warn');
+  const level = $('lvl').value;
+  $('btnExplain').disabled = true;
+  setStatus('해설 분석 중...');
+  try {
+    let rows = null;
+    try { rows = await aiExplain(text, level); } catch (_) { rows = null; }
+    if (!rows) { rows = localExplain(text, level); setStatus(`로컬 사전 기반 해설 ${rows.length}건 생성`, 'ok'); }
+    else setStatus(`내장 AI 해설 ${rows.length}건 생성`, 'ok');
+    renderTable(rows);
+  } catch (e) {
+    setStatus('해설 생성 실패: ' + e.message, 'err');
+  } finally { $('btnExplain').disabled = false; }
+};
+
+/* ============ 5. 저장 ============ */
+function download(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+$('btnSaveTxt').onclick = () => {
+  const table = $('explainOut').querySelectorAll('tbody tr');
+  let exp = '';
+  table.forEach(tr => {
+    const c = [...tr.children].map(td => td.innerText.replace(/\s+/g, ' ').trim());
+    exp += `- ${c[0]} [${c[1]}] : ${c[2]}${c[3] && c[3] !== '—' ? ' — ' + c[3] : ''}\n`;
+  });
+  const content =
+`========================================
+[원문 / ${$('srcLang').value}]
+========================================
+${$('srcText').value}
+
+========================================
+[English Translation]
+========================================
+${$('dstText').value}
+
+========================================
+[주요 표현 · 단어 해설]
+========================================
+${exp || '(해설 없음)'}
+
+저장시각: ${new Date().toLocaleString('ko-KR')}
+`;
+  download(new Blob([content], { type: 'text/plain;charset=utf-8' }), `transcript_${Date.now()}.txt`);
+  setStatus('텍스트 파일을 저장했습니다.', 'ok');
+};
+
+let recorder = null, chunks = [], captureStream = null;
+
+$('btnRecord').onclick = async () => {
+  if (!$('dstText').value.trim()) return setStatus('읽을 영어 문장이 없습니다.', 'warn');
+  try {
+    captureStream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+    const audioTracks = captureStream.getAudioTracks();
+    if (!audioTracks.length) {
+      captureStream.getTracks().forEach(t => t.stop());
+      return setStatus('오디오 트랙 없음 — “탭 오디오도 공유”를 체크하세요.', 'err');
+    }
+    chunks = [];
+    recorder = new MediaRecorder(new MediaStream(audioTracks), { mimeType: 'audio/webm' });
+    recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+    recorder.onstop = () => {
+      captureStream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, { type: 'audio/webm' });
+      const p = $('player'); p.src = URL.createObjectURL(blob); p.hidden = false;
+      download(blob, `pronunciation_${Date.now()}.webm`);
+      setStatus('전체 발음 음성 파일을 저장했습니다.', 'ok');
+      $('btnRecord').disabled = false; $('btnStopRecord').disabled = true;
+    };
+    recorder.start();
+    $('btnRecord').disabled = true; $('btnStopRecord').disabled = false;
+    setStatus('🔴 녹음 중 + 전체 재생 중...');
+
+    // 큐 전체가 끝난 뒤에만 녹음 종료
+    const started = speakAll(() => setTimeout(() => {
+      if (recorder && recorder.state !== 'inactive') recorder.stop();
+    }, 600));
+    if (!started) { recorder.stop(); }
+  } catch (err) {
+    setStatus('녹음 시작 실패: ' + err.message, 'err');
+    $('btnRecord').disabled = false;
+  }
+};
+
+$('btnStopRecord').onclick = () => {
+  speaking = false; clearInterval(keepAlive); onAllDone = null; synth.cancel();
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+};
+
+updCount(); renderSpeakView();
+</script>
+</body>
+</html>
